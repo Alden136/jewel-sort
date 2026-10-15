@@ -16,17 +16,19 @@ On a phone, use your browser's "Add to Home Screen" to install it. A service wor
 
 ## How it plays
 
-1. Pick a picture from the gallery. Its unfinished mosaic shows muted, numbered spots.
-2. Tap any jewel. Every jewel of that color pops up, in the jewel pile and in the tray at the bottom,
-   and the picture's empty spots for that color start to glow.
-3. Tap a glowing spot. All the popped jewels fly into that color's empty spots, filling outward from where you tapped.
-   Or tap the tray at the bottom to park the popped jewels in its 7 spaces and gather more of that color first.
-4. Tap the popped jewel again to put the color back down. You can also drag a jewel onto the picture or the tray.
-5. New jewels are dealt as the pile empties, from at most six colors at a time. When a color is finished, the next one joins.
-6. Fill the last spots, enjoy the reveal, and the next picture in the album unlocks.
+1. Pick a picture from the gallery. Every spot is covered by a jewel sitting on a spot of the wrong color.
+   Misplaced jewels are drawn small, so the color their spot needs shows around them.
+   (When one color covers more than half a picture, a few of its jewels have to start in place.)
+2. Tap any misplaced jewel. Every misplaced jewel of that color lifts up, and that color's spots glow.
+3. Tap a glowing spot. The lifted jewels move onto that color's spots, filling outward from where you tapped.
+   A wrong jewel already sitting on one of those spots is bumped into the 7-space tray at the bottom.
+   When the tray is full, only empty spots get filled.
+4. Tap a tray jewel to pick up its color, then a spot of that color. Empty spots are filled first, which frees tray space.
+   You can also tap the tray to lift a picked-up color off the picture, or drag a tray jewel onto the picture.
+5. Finish when every jewel is on its own color. The reveal plays, and the next picture in the album unlocks.
 
-Hint, Rearrange, and Undo are free and unlimited. Hint flashes a jewel and a spot for it.
-Undo returns the most recent jewels you parked in the tray to the pile. Jewels placed in the picture stay there.
+Hint and Undo are free and unlimited. Hint flashes a jewel and a spot for it, and always points to a move that works.
+Undo puts the most recent jewels you lifted into the tray back where they were.
 Tapping a spot of the wrong color does nothing except give a gentle message.
 
 ## Content
@@ -46,7 +48,7 @@ Pinch with two fingers, or use the mouse wheel, to zoom the picture. Double-tap 
 
 | File | Purpose |
 | --- | --- |
-| `js/engine.js` | Pure rules: jewel pile, holding tray, placing a color from a tapped spot, undo, hint, rearrange, invariants. No DOM. |
+| `js/engine.js` | Pure rules: the starting scatter, placing a color from a tapped spot, bumping into the tray, undo, hint, invariants. No DOM. |
 | `js/validate.js` | Level validator plus an automated playthrough that checks inventory at every step. |
 | `js/pictures.js` | Picture library: grids of palette keys (`.` = intentionally empty cell). |
 | `js/storage.js` | Versioned save with atomic write and one backup copy. |
@@ -55,7 +57,7 @@ Pinch with two fingers, or use the mouse wheel, to zoom the picture. Double-tap 
 | `js/audio.js` | Synthesized sound effects (Web Audio). |
 | `js/main.js` | Screens, input, animation, tutorial, gallery, settings. |
 
-The game saves after every placement and tray move, and whenever the page is hidden.
+The game saves after every placement and tray lift, and whenever the page is hidden.
 Each placement is committed before its animation starts. If the app closes mid-flight, reopening shows the committed result without duplicating any jewels.
 
 ### Adding a picture
@@ -71,9 +73,10 @@ npm test
 ```
 
 Node's built-in test runner covers the core checks:
-- placing a color uses every popped jewel, from the pile and the tray, and fills outward from the tapped spot
+- the starting scatter keeps every jewel, and only the unavoidable minimum starts on its own color
+- placing bumps the jewels in the way into the tray, uses tray jewels first, and never overfills the tray
 - a spot of the wrong color is rejected without changing anything
-- the tray takes only what fits and refuses more when full; undo returns tray moves to the pile
-- a finished color introduces the next one, and only colors in play are dealt
+- undo returns lifted jewels to their spots, and forgets moves whose spots were filled since
+- the hint always names a move that succeeds
 - an exact save and restore resumes play identically; corrupted saves are rejected and fall back to the backup
-- all 20 pictures play to completion from many random seeds, mixing placements, tray moves, and undos
+- all 20 pictures play to completion from many random seeds, mixing placements, tray lifts, and undos

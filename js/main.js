@@ -32,7 +32,7 @@ let completing = false;
 let coach = null;
 const pending = mosaic.pending;
 const flights = new Set();
-const slotEls = { supply: [], hold: [] };
+const slotEls = [];
 let popped = null; // color picked up from the jewels, waiting for a spot
 let messageTimer = 0;
 let freshUnlock = null;
@@ -249,15 +249,15 @@ function openPicture(id, { fresh = false } = {}) {
   $('game').classList.remove('revealed');
   $('completeSheet').hidden = true;
   $('gameTitle').textContent = pic.title;
-  buildAreas();
+  buildTray();
   showScreen('game');
   mosaic.showPreview = save.settings.showPreview;
   mosaic.highlight = null;
   mosaic.flashes.clear();
-  mosaic.setPicture(pic, game.filledCells());
+  mosaic.setPicture(pic, game.board);
   mosaic.resize();
   message('');
-  renderJewels();
+  renderTray();
   updateStatus();
   persist();
   if (game.isComplete()) {
@@ -284,215 +284,219 @@ function updateStatus() {
   $('progressBar').style.width = `${pct}%`;
   $('progressText').textContent = `${pct}%`;
   $('undoBtn').disabled = !game.canUndo();
-  const any = game.supply.some(Boolean) || game.hold.some(Boolean);
-  $('hintBtn').disabled = !any;
-  $('rearrangeBtn').disabled = !game.supply.some(Boolean);
+  $('hintBtn').disabled = game.isComplete();
 }
 
-// Supply and holding tray -----------------------------------------
+// Holding tray ----------------------------------------------------
 
-function buildAreas() {
-  for (const area of ['supply', 'hold']) {
-    const root = $(area);
-    root.textContent = '';
-    slotEls[area] = game[area].map(() => {
-      const slot = document.createElement('div');
-      slot.className = 'slot';
-      root.append(slot);
-      return slot;
-    });
+function buildTray() {
+  const root = $('hold');
+  root.textContent = '';
+  slotEls.length = 0;
+  for (let i = 0; i < game.hold.length; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'slot';
+    root.append(slot);
+    slotEls.push(slot);
   }
 }
 
-function jewelEl(id) {
-  return document.querySelector(`#game .jewel[data-id="${id}"]`);
-}
-
-function makeJewel(j, deal) {
-  const p = colorOf(j.color);
+function makeJewel(color, slot) {
+  const p = colorOf(color);
   const el = document.createElement('button');
   el.className = 'jewel';
-  if (deal && motion()) {
-    el.classList.add('deal');
-    el.style.animationDelay = `${Math.random() * 160}ms`;
-  }
-  el.dataset.id = j.id;
-  el.dataset.color = j.color;
+  el.dataset.slot = slot;
+  el.dataset.color = color;
   colorVars(el, p.color);
   el.style.backgroundImage = `url(${jewelURL(p.color)})`;
-  el.setAttribute('aria-label', `Jewel ${p.label}, ${p.name}`);
+  el.setAttribute('aria-label', `Tray jewel ${p.label}, ${p.name}`);
   el.innerHTML = `<span class="label">${p.label}</span>`;
   return el;
 }
 
-// Syncs both jewel areas with the game, and marks the popped color.
-function renderJewels(dealt = new Set()) {
-  for (const area of ['supply', 'hold']) {
-    game[area].forEach((j, i) => {
-      const slot = slotEls[area][i];
-      const el = slot.firstElementChild;
-      if ((el?.dataset.id ?? null) === (j ? String(j.id) : null)) return;
-      slot.textContent = '';
-      if (j) slot.append(makeJewel(j, dealt.has(j.id)));
-    });
-  }
-  for (const el of document.querySelectorAll('#game .jewel')) {
+function trayJewel(slot) {
+  return slotEls[slot]?.firstElementChild ?? null;
+}
+
+// Syncs the tray with the game and marks the picked-up color everywhere.
+function renderTray() {
+  game.hold.forEach((c, i) => {
+    const el = trayJewel(i);
+    if ((el ? Number(el.dataset.color) : null) === c) return;
+    slotEls[i].textContent = '';
+    if (c !== null) slotEls[i].append(makeJewel(c, i));
+  });
+  for (const el of $('hold').querySelectorAll('.jewel')) {
     const on = Number(el.dataset.color) === popped;
     el.classList.toggle('popped', on);
     el.setAttribute('aria-pressed', String(on));
   }
-  $('supply').classList.toggle('has-pop', popped !== null);
   $('hold').classList.toggle('has-pop', popped !== null);
-  $('hold').classList.toggle('target', popped !== null && game.holdFree() > 0 && game.available(popped).some((j) => j.area === 'supply'));
+  $('hold').classList.toggle('target', popped !== null && game.holdFree() > 0 && game.available(popped).some((j) => j.area === 'board'));
   mosaic.highlight = popped;
   mosaic.draw();
 }
 
-// Picks up every jewel of a color, or puts them back down.
+// Slides an element in from a viewport rectangle.
+function slideIn(el, from) {
+  if (!motion() || !el || !from) return;
+  const now = el.getBoundingClientRect();
+  el.animate(
+    [
+      { transform: `translate(${from.left + from.width / 2 - (now.left + now.width / 2)}px, ${from.top + from.height / 2 - (now.top + now.height / 2)}px) scale(${from.width / now.width})` },
+      { transform: 'none' },
+    ],
+    { duration: 380, easing: 'cubic-bezier(.3,.7,.3,1)' },
+  );
+}
+
+// Picking up -------------------------------------------------------
+
+// Picks up every misplaced jewel of a color, or puts them back down.
 function popColor(color) {
   if (!game || completing) return;
   sound.select();
   clearHint();
   if (popped === color) {
     popped = null;
-    renderJewels();
+    renderTray();
     message('');
     return;
   }
   popped = color;
-  renderJewels();
+  renderTray();
   const p = colorOf(color);
-  const n = game.available(color).length;
   if (coach?.step === 'pop') {
     coach.step = 'place';
-    clearCoachMarks();
-    message(`Now tap a glowing spot in the picture to set every color ${p.label} jewel in place.`, { coachTone: true, ms: 0 });
+    mosaic.flashes.clear();
+    message(`Every color ${p.label} spot now glows. Tap one to set your color ${p.label} jewels there.`, { coachTone: true, ms: 0 });
     return;
   }
-  message(`Picked up ${n} of color ${p.label}. Tap a glowing spot or the tray.`);
+  const n = game.available(color).length;
+  message(`Picked up ${n} of color ${p.label}. Tap a glowing spot, or the tray to lift them off.`);
+}
+
+// Picture taps: pick up the jewel there, or set the picked-up color down.
+function tapPicture(x, y) {
+  if (!game || completing) return;
+  sound.ensure();
+  const hit = mosaic.cellAt(x, y);
+  const spot = hit >= 0 && pic.cells[hit] >= 0;
+  const loose = spot && game.board[hit] >= 0 && !game.isCorrect(hit);
+  if (popped === null) {
+    if (loose) popColor(game.board[hit]);
+    else if (spot && game.board[hit] === -1) message('Tap a jewel first, then a glowing spot for it.');
+    return;
+  }
+  if (spot && pic.cells[hit] === popped && !game.isCorrect(hit)) return placeAt(hit);
+  if (loose) return popColor(game.board[hit]); // the same color puts it down; another picks that one up
+  if (spot && game.board[hit] === -1) {
+    sound.nope();
+    buzz(20);
+    message(`That spot is for color ${colorOf(pic.cells[hit]).label}. Look for the glowing color ${colorOf(popped).label} spots.`);
+    return;
+  }
+  // A tap on a finished spot or a gap snaps to a glowing spot close by.
+  const cell = mosaic.nearestCell(x, y, (i) => pic.cells[i] === popped && !game.isCorrect(i), 1.2);
+  if (cell >= 0) placeAt(cell);
+}
+
+function sourceRect(from) {
+  return from.area === 'hold' ? trayJewel(from.slot)?.getBoundingClientRect() : mosaic.cellRect(from.cell);
 }
 
 function placeAt(cell) {
   const color = popped;
   const level = pic;
-  const from = new Map(game.available(color).map((j) => [j.id, jewelEl(j.id)?.getBoundingClientRect()]));
+  const rects = new Map(game.available(color).map((j) => [`${j.area}:${j.slot ?? j.cell}`, sourceRect(j)]));
   const r = game.place(color, cell);
-  if (!r.ok) return;
+  if (!r.ok) {
+    if (r.reason === 'full') {
+      sound.nope();
+      message('The tray is full. Put a tray jewel on an empty spot of its color to make room.');
+    }
+    return;
+  }
   persist();
-  if (motion()) for (const p of r.placements) pending.add(p.cell);
-  mosaic.filled = game.filledCells();
+  if (motion()) for (const m of r.moves) pending.add(m.to);
+  // Each placement puts the color back down; any left over stay where they are.
+  const left = game.available(color).filter((j) => j.area === 'board').length;
   popped = null;
-  renderJewels(new Set(r.dealt.map((d) => d.jewel.id)));
+  renderTray();
   updateStatus();
-  sound.cascade(Math.min(r.placements.length, 10));
+  sound.cascade(Math.min(r.moves.length, 10));
   buzz([10, 40, 10]);
 
   const hex = colorOf(color).color;
-  r.placements.forEach((p, k) => {
-    fly(hex, from.get(p.id), mosaic.cellRect(p.cell), { duration: 480, delay: k * 45 }).then(() => {
+  r.moves.forEach((m, k) => {
+    fly(hex, rects.get(`${m.from.area}:${m.from.slot ?? m.from.cell}`), mosaic.cellRect(m.to), { duration: 480, delay: k * 45 }).then(() => {
       if (pic !== level) return;
-      pending.delete(p.cell);
-      mosaic.pop(p.cell);
+      pending.delete(m.to);
+      mosaic.pop(m.to);
     });
   });
+  for (const b of r.bumps) slideIn(trayJewel(b.slot), mosaic.cellRect(b.cell));
 
+  const fromTray = r.moves.some((m) => m.from.area === 'hold');
   if (coach?.step === 'place') {
+    coach.step = r.bumps.length ? 'tray' : 'done';
+    if (r.bumps.length) message('The jewels that were in the way went to the tray. Tap one, then an empty spot of its color.', { coachTone: true, ms: 0 });
+    else message('');
+  } else if (coach?.step === 'tray' && fromTray) {
     coach.step = 'done';
-    message('Nice! The tray at the bottom holds jewels while you gather more of a color.', { coachTone: true, ms: 7000 });
+    message('That is the whole game. Keep going until every jewel is home!', { coachTone: true, ms: 5000 });
+  } else if (left) {
+    message(`The tray filled up, so ${left} color ${colorOf(color).label} jewel${left === 1 ? '' : 's'} stayed put. Put tray jewels on empty spots to make room.`);
+  } else if (r.bumps.length) {
+    message(`${r.bumps.length} jewel${r.bumps.length === 1 ? '' : 's'} moved to the tray.`);
   } else {
     message('');
   }
-  if (r.introduced.length) {
-    const names = r.introduced.map((c) => colorOf(c).label).join(', ');
-    toast(`Color ${colorOf(r.completedColor).label} finished — color ${names} joins the jewels`);
-  } else if (r.completedColor !== null && !r.finished) {
-    toast(`Color ${colorOf(r.completedColor).label} finished`);
-  }
+  if (r.completedColor !== null && !r.finished) toast(`Color ${colorOf(r.completedColor).label} is finished`);
   if (r.finished) {
     completing = true;
     Promise.all([...flights]).then(finishPicture);
   }
 }
 
+// Lifts the picked-up color off the picture into the tray.
 function stashPopped() {
   if (!game || completing || popped === null) return;
-  const before = new Map();
-  for (const j of game.available(popped)) before.set(j.id, jewelEl(j.id)?.getBoundingClientRect());
   const r = game.stash(popped);
   if (!r.ok) {
     sound.nope();
-    message(r.reason === 'full' ? 'The tray is full. Place some jewels in the picture first.' : 'Those jewels are already in the tray.');
+    message(r.reason === 'full' ? 'The tray is full. Put a tray jewel on an empty spot first.' : 'Those jewels are already in the tray.');
     return;
   }
   persist();
   sound.click(r.moves.length);
   buzz(8);
-  renderJewels(new Set(r.dealt.map((d) => d.jewel.id)));
+  renderTray();
   updateStatus();
-  animateFrom(r.moves.map((m) => [m.id, before.get(m.id)]));
-  if (r.left) message(`The tray is full. ${r.left} more stay picked up in the jewels above.`);
+  for (const m of r.moves) slideIn(trayJewel(m.slot), mosaic.cellRect(m.cell));
+  message(r.left ? `The tray is full. ${r.left} more stay on the picture.` : '');
 }
 
-// Slides re-rendered jewels from where they used to be.
-function animateFrom(pairs, scale = 1) {
-  if (!motion()) return;
-  for (const [id, old] of pairs) {
-    const el = jewelEl(id);
-    if (!el || !old) continue;
-    const now = el.getBoundingClientRect();
-    el.animate(
-      [
-        { transform: `translate(${old.left - now.left}px, ${old.top - now.top}px) scale(${scale})` },
-        { transform: 'none' },
-      ],
-      { duration: 320, easing: 'cubic-bezier(.3,.7,.3,1)' },
-    );
-  }
-}
-
-// Picture taps place the popped color at the tapped spot.
-function tapPicture(x, y) {
-  if (!game || completing) return;
-  sound.ensure();
-  if (popped === null) {
-    const cell = mosaic.cellAt(x, y);
-    if (cell >= 0 && pic.cells[cell] >= 0 && !game.isFilled(cell)) message('Tap a jewel first, then tap the spot where it goes.');
-    return;
-  }
-  const hit = mosaic.cellAt(x, y);
-  const emptyHit = hit >= 0 && pic.cells[hit] >= 0 && !game.isFilled(hit);
-  if (emptyHit && pic.cells[hit] !== popped) {
-    sound.nope();
-    buzz(20);
-    message(`That spot is for color ${colorOf(pic.cells[hit]).label}. Look for the glowing color ${colorOf(popped).label} spots.`);
-    return;
-  }
-  // A tap on a filled cell or a gap snaps to a matching spot close by.
-  const cell = emptyHit ? hit : mosaic.nearestCell(x, y, (i) => pic.cells[i] === popped && !game.isFilled(i));
-  if (cell >= 0) placeAt(cell);
-}
-
-// Jewel input: tap to pick up a color; drag a jewel onto the picture or tray.
-function bindJewelInput() {
+// Tray input: tap a jewel to pick up its color, or drag it onto the picture.
+function bindTrayInput() {
+  const root = $('hold');
   let drag = null;
-  const areas = [$('supply'), $('hold')];
 
-  const onDown = (e) => {
+  root.addEventListener('pointerdown', (e) => {
     const el = e.target.closest('.jewel');
     if (!el || completing || drag) return;
     sound.ensure();
     drag = { el, color: Number(el.dataset.color), x: e.clientX, y: e.clientY, pid: e.pointerId, moving: false, ghost: null };
     el.setPointerCapture?.(e.pointerId);
-  };
+  });
 
-  const onMove = (e) => {
+  root.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.pid) return;
-    const dist = Math.hypot(e.clientX - drag.x, e.clientY - drag.y);
-    if (!drag.moving && dist > 10 && save.settings.drag) {
+    if (!drag.moving && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 10 && save.settings.drag) {
       drag.moving = true;
       if (popped !== drag.color) {
         popped = drag.color;
-        renderJewels();
+        renderTray();
       }
       const r = drag.el.getBoundingClientRect();
       const g = drag.el.cloneNode(true);
@@ -507,9 +511,9 @@ function bindJewelInput() {
       drag.ghost.style.left = `${e.clientX - drag.size / 2}px`;
       drag.ghost.style.top = `${e.clientY - drag.size * 0.9}px`;
     }
-  };
+  });
 
-  const onUp = (e, cancelled) => {
+  const finish = (e, cancelled) => {
     if (!drag || e.pointerId !== drag.pid) return;
     const d = drag;
     drag = null;
@@ -520,22 +524,15 @@ function bindJewelInput() {
     d.ghost.remove();
     d.el.classList.remove('dragging');
     if (cancelled) return;
-    const under = document.elementFromPoint(e.clientX, e.clientY);
-    if (under?.closest('#hold')) stashPopped();
-    else if (under === $('mosaic')) {
+    if (document.elementFromPoint(e.clientX, e.clientY) === $('mosaic')) {
       const r = $('mosaic').getBoundingClientRect();
       tapPicture(e.clientX - r.left, e.clientY - r.top);
     }
   };
-
-  for (const root of areas) {
-    root.addEventListener('pointerdown', onDown);
-    root.addEventListener('pointermove', onMove);
-    root.addEventListener('pointerup', (e) => onUp(e, false));
-    root.addEventListener('pointercancel', (e) => onUp(e, true));
-  }
-  // Tapping the tray itself (not one of its jewels) parks the popped color.
-  $('hold').addEventListener('click', (e) => {
+  root.addEventListener('pointerup', (e) => finish(e, false));
+  root.addEventListener('pointercancel', (e) => finish(e, true));
+  // Tapping the tray itself (not one of its jewels) lifts the picked-up color into it.
+  root.addEventListener('click', (e) => {
     if (!e.target.closest('.jewel')) stashPopped();
   });
 }
@@ -552,54 +549,50 @@ function showHint() {
   const h = game.hint();
   if (!h) return;
   clearHint();
-  jewelEl(h.jewelId)?.classList.add('hint');
+  if (h.from.area === 'hold') trayJewel(h.from.slot)?.classList.add('hint');
+  else mosaic.flash([h.from.cell]);
   mosaic.flash([h.cell]);
   const p = colorOf(h.color);
-  message(popped === h.color ? `Tap the flashing spot to place your color ${p.label} jewels.` : `Tap this color ${p.label} jewel, then the flashing spot in the picture.`);
+  message(popped === h.color ? `Tap the flashing spot to set your color ${p.label} jewels.` : `Tap a flashing color ${p.label} jewel, then the flashing spot.`);
   clearTimeout(hintTimer);
   hintTimer = setTimeout(clearHint, 2600);
 }
 
-function rearrange() {
-  if (!game || completing) return;
-  const before = [];
-  for (const el of $('supply').querySelectorAll('.jewel')) before.push([el.dataset.id, el.getBoundingClientRect()]);
-  game.rearrange();
-  persist();
-  renderJewels();
-  animateFrom(before);
-  sound.cascade(4);
-}
-
 function undo() {
   if (!game || completing) return;
-  const before = [];
-  for (const el of $('hold').querySelectorAll('.jewel')) before.push([el.dataset.id, el.getBoundingClientRect()]);
+  const rects = game.hold.map((_, i) => trayJewel(i)?.getBoundingClientRect());
   const r = game.undo();
   if (!r.ok) return;
   persist();
-  renderJewels();
+  const level = pic;
+  renderTray();
   updateStatus();
   sound.select();
-  animateFrom(before);
-  if (r.back.some((b) => b.slot === null)) message('Some jewels went back to the bag. They will be dealt again.');
+  for (const m of r.moves) {
+    if (motion()) pending.add(m.cell);
+    fly(colorOf(m.color).color, rects[m.slot], mosaic.cellRect(m.cell), { duration: 320 }).then(() => {
+      if (pic !== level) return;
+      pending.delete(m.cell);
+      mosaic.draw();
+    });
+  }
 }
 
 // Tutorial ------------------------------------------------------
 
 function clearCoachMarks() {
   document.querySelectorAll('.coach').forEach((el) => el.classList.remove('coach'));
+  mosaic.flashes.clear();
 }
 
 function startCoach() {
   coach = null;
   clearCoachMarks();
-  if (!pic.tutorial || save.seen.tutorial || game.placedTotal() > 0) return;
+  if (!pic.tutorial || save.seen.tutorial || game.emptySpots().length || game.placedTotal() > pic.cellCount * 0.2) return;
   coach = { step: 'pop' };
-  const color = game.active.reduce((a, b) => (game.available(b).length > game.available(a).length ? b : a));
-  const j = game.available(color)[0];
-  if (j) jewelEl(j.id)?.classList.add('coach');
-  message('Tap the glowing jewel to pick up every jewel of its color.', { coachTone: true, ms: 0 });
+  const h = game.hint();
+  if (h?.from.area === 'board') mosaic.flash([h.from.cell], 600000);
+  message('The jewels are scattered on spots of the wrong color. Tap the flashing jewel to pick up its whole color.', { coachTone: true, ms: 0 });
 }
 
 // Completion ----------------------------------------------------
@@ -623,7 +616,7 @@ function finishPicture() {
   freshUnlock = first && next && !save.completed[next.id] ? next.id : null;
 
   $('game').classList.add('revealed');
-  mosaic.filled = game.filledCells();
+  mosaic.board = game.board;
   requestAnimationFrame(() => {
     mosaic.resize();
     mosaic.fit();
@@ -656,9 +649,7 @@ function openViewer(id) {
   $('viewerTitle').textContent = p.title;
   $('viewer').hidden = false;
   if (!viewerMosaic) viewerMosaic = new MosaicView($('viewerCanvas'));
-  const all = new Set();
-  p.cells.forEach((c, i) => c >= 0 && all.add(i));
-  viewerMosaic.setPicture(p, all);
+  viewerMosaic.setPicture(p, Array.from(p.cells));
   viewerMosaic.resize();
   if (motion()) viewerMosaic.sparkle(20);
 }
@@ -707,6 +698,7 @@ function applySettings() {
   sound.enabled = s.sound;
   sound.volume = s.volume;
   mosaic.showPreview = s.showPreview;
+  mosaic.largeJewels = s.largeJewels;
   mosaic.draw();
 }
 
@@ -782,14 +774,13 @@ $('gameSettings').addEventListener('click', openSettings);
 $('backBtn').addEventListener('click', leaveGame);
 $('fitBtn').addEventListener('click', () => mosaic.fit());
 $('hintBtn').addEventListener('click', showHint);
-$('rearrangeBtn').addEventListener('click', rearrange);
 $('undoBtn').addEventListener('click', undo);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('settings').hidden) closeSettings();
   else if (!$('viewer').hidden) $('viewer').hidden = true;
 });
-bindJewelInput();
+bindTrayInput();
 applySettings();
 renderGallery();
 
@@ -806,4 +797,4 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http') && wind
 }
 
 // Exposed for automated checks.
-window.jewelMosaic = { get game() { return game; }, save, cellRect: (c) => mosaic.cellRect(c) };
+window.jewelMosaic = { get game() { return game; }, save, cellRect: (c) => mosaic.cellRect(c), mosaicHighlight: () => popped };

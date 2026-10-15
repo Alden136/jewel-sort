@@ -1,8 +1,9 @@
-// Mosaic canvas: draws empty sockets and placed jewels, reports taps on
-// cells, and handles two-finger pinch, one-finger pan when zoomed, and
-// wheel zoom.
+// Mosaic canvas: draws each spot with the jewel sitting on it (full size
+// when it is the right color, smaller on a spot of another color), reports
+// taps, and handles two-finger pinch, one-finger pan when zoomed, and wheel
+// zoom.
 
-import { jewelSprite, mix } from './jewels.js';
+import { jewelSprite, mix, isLight } from './jewels.js';
 
 const MAX_ZOOM = 6;
 const SOCKET_BG = '#1a1f3d';
@@ -13,11 +14,11 @@ export class MosaicView {
     this.ctx = canvas.getContext('2d');
     this.onZoom = onZoom;
     this.onTap = onTap;
-    this.highlight = null; // color whose empty cells glow as drop targets
+    this.highlight = null; // picked-up color: its jewels lift, its spots glow
     this.flashes = new Map(); // cell -> end time, for hints
     this.pic = null;
-    this.filled = new Set();
-    this.pending = new Set(); // committed cells whose jewel is still in flight
+    this.board = []; // jewel color on each spot, -1 when empty
+    this.pending = new Set(); // spots whose new jewel is still in flight
     this.showPreview = true;
     this.scale = 1;
     this.ox = 0;
@@ -33,9 +34,9 @@ export class MosaicView {
     this.bindGestures();
   }
 
-  setPicture(pic, filled) {
+  setPicture(pic, board) {
     this.pic = pic;
-    this.filled = filled;
+    this.board = board;
     this.pops.clear();
     this.sparkles = [];
     this.fit();
@@ -153,7 +154,8 @@ export class MosaicView {
   }
 
   sparkle(count = 46) {
-    const cells = [...this.filled];
+    const cells = [];
+    this.board.forEach((c, i) => c >= 0 && c === this.pic.cells[i] && cells.push(i));
     const now = performance.now();
     for (let i = 0; i < count && cells.length; i++) {
       this.sparkles.push({
@@ -208,7 +210,8 @@ export class MosaicView {
       const y = y0 + Math.floor(i / pic.w) * c;
       if (x > this.cssW || y > this.cssH || x + c < 0 || y + c < 0) continue;
       const color = pic.palette[col].color;
-      if (this.filled.has(i) && !this.pending.has(i)) {
+      const jewel = this.pending.has(i) ? -1 : this.board[i];
+      if (jewel === col) {
         let s = c;
         const t0 = this.pops.get(i);
         if (t0 !== undefined) {
@@ -220,31 +223,67 @@ export class MosaicView {
           }
         }
         ctx.drawImage(jewelSprite(color, spritePx), x + (c - s) / 2, y + (c - s) / 2, s, s);
-      } else {
-        const g = c * 0.14;
-        // While a color is picked up, other colors' spots step back.
-        const dim = this.highlight !== null && col !== this.highlight;
-        ctx.globalAlpha = dim ? 0.35 : 1;
-        ctx.fillStyle = this.showPreview ? mix(color, SOCKET_BG, 0.68) : 'rgba(255,255,255,0.07)';
-        roundRect(ctx, x + g, y + g, c - g * 2, c - g * 2, c * 0.22);
-        ctx.fill();
-        if (labels) {
-          ctx.fillStyle = 'rgba(255,255,255,0.5)';
-          ctx.fillText(pic.palette[col].label, x + c / 2, y + c / 2 + 1);
+        continue;
+      }
+
+      // The spot itself, tinted with the color it needs.
+      const g = c * 0.1;
+      const dim = this.highlight !== null && col !== this.highlight;
+      ctx.globalAlpha = dim ? 0.35 : 1;
+      ctx.fillStyle = this.showPreview ? mix(color, SOCKET_BG, 0.55) : 'rgba(255,255,255,0.08)';
+      roundRect(ctx, x + g, y + g, c - g * 2, c - g * 2, c * 0.22);
+      ctx.fill();
+      if (labels && jewel < 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.fillText(pic.palette[col].label, x + c / 2, y + c / 2 + 1);
+      }
+      ctx.globalAlpha = 1;
+
+      const target = col === this.highlight;
+      if (target || this.flashes.has(i)) {
+        ctx.save();
+        ctx.globalAlpha = target ? glow : 1;
+        ctx.lineWidth = Math.max(1.5, c * 0.09);
+        ctx.strokeStyle = this.flashes.has(i) ? '#ffffff' : mix(color, '#ffffff', 0.55);
+        ctx.shadowColor = color;
+        ctx.shadowBlur = c * 0.5;
+        roundRect(ctx, x + g * 0.8, y + g * 0.8, c - g * 1.6, c - g * 1.6, c * 0.24);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // A jewel sitting on a spot of another color: smaller, so the spot's
+      // own color shows around it. A picked-up one lifts and glows.
+      if (jewel >= 0) {
+        const jc = pic.palette[jewel].color;
+        const lifted = jewel === this.highlight;
+        const s = lifted ? c * (0.84 + 0.04 * Math.sin(now / 160)) : c * (this.largeJewels ? 0.78 : 0.66);
+        ctx.save();
+        if (this.highlight !== null && !lifted) ctx.globalAlpha = 0.4;
+        if (lifted) {
+          ctx.shadowColor = mix(jc, '#ffffff', 0.4);
+          ctx.shadowBlur = c * 0.45;
         }
-        ctx.globalAlpha = 1;
-        const target = col === this.highlight && !this.filled.has(i);
-        if (target || this.flashes.has(i)) {
+        const jx = x + (c - s) / 2;
+        const jy = y + (c - s) / 2 - (lifted ? c * 0.06 : 0);
+        ctx.drawImage(jewelSprite(jc, spritePx), jx, jy, s, s);
+        ctx.restore();
+        if (labels && (this.highlight === null || lifted)) {
           ctx.save();
-          ctx.globalAlpha = target ? glow : 1;
-          ctx.lineWidth = Math.max(1.5, c * 0.1);
-          ctx.strokeStyle = this.flashes.has(i) ? '#ffffff' : mix(color, '#ffffff', 0.55);
-          ctx.shadowColor = color;
-          ctx.shadowBlur = c * 0.5;
-          roundRect(ctx, x + g * 0.6, y + g * 0.6, c - g * 1.2, c - g * 1.2, c * 0.24);
-          ctx.stroke();
+          ctx.font = `800 ${Math.round(s * 0.42)}px system-ui, sans-serif`;
+          ctx.fillStyle = isLight(jc) ? '#1b1838' : '#ffffff';
+          ctx.fillText(pic.palette[jewel].label, jx + s / 2, jy + s / 2 + 1);
           ctx.restore();
         }
+      }
+      if (this.flashes.has(i) && jewel >= 0) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1.5, c * 0.07);
+        ctx.strokeStyle = '#ffffff';
+        ctx.globalAlpha = glow;
+        roundRect(ctx, x + c * 0.15, y + c * 0.15, c * 0.7, c * 0.7, c * 0.2);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 

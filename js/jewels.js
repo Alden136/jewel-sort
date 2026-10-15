@@ -1,5 +1,5 @@
-// Faceted jewel sprites. One drawing routine serves every color: the supply,
-// trays, flying jewels, the mosaic, and exported images.
+// Faceted jewel sprites. One drawing routine serves every color: the picture,
+// the tray, flying jewels, and exported images.
 
 const spriteCache = new Map();
 const urlCache = new Map();
