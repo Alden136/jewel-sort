@@ -303,6 +303,7 @@ svg {
 
 #message {
   min-height: 2.6em;
+  padding-bottom: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -319,88 +320,6 @@ svg {
 }
 #message.empty {
   opacity: 0;
-}
-
-#trays {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  padding-bottom: 10px;
-}
-.tray {
-  flex: 1 1 0;
-  max-width: 78px;
-  min-width: 0;
-  min-height: 74px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28), inset 0 0 0 1px var(--line);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 6px 4px;
-  position: relative;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.tray.selected {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), inset 0 0 0 2.5px var(--accent), 0 0 18px -4px var(--c);
-}
-.tray.drop-target {
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), inset 0 0 0 2.5px #ffffff;
-}
-.tray-gem {
-  width: 32px;
-  height: 32px;
-  background-size: contain;
-  display: grid;
-  place-items: center;
-}
-.label {
-  font-weight: 800;
-  font-size: 0.82rem;
-  line-height: 1;
-  color: var(--ink);
-  text-shadow: 0 0 3px var(--halo);
-  pointer-events: none;
-}
-.tray-gem .label {
-  font-size: 0.95rem;
-}
-.tray-slots {
-  display: grid;
-  grid-template-columns: repeat(4, 7px);
-  gap: 3px;
-}
-.tray-slots i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.16);
-}
-.tray-slots i.on {
-  background: var(--c);
-  box-shadow: 0 0 5px var(--c);
-}
-.tray.entering {
-  animation: tray-in 0.4s ease;
-}
-.tray.leaving {
-  animation: tray-out 0.3s ease forwards;
-}
-@keyframes tray-in {
-  from {
-    transform: translateY(14px) scale(0.8);
-    opacity: 0;
-  }
-}
-@keyframes tray-out {
-  to {
-    transform: scale(0.6);
-    opacity: 0;
-  }
 }
 
 #supply {
@@ -431,6 +350,13 @@ svg {
   padding: 0;
   touch-action: none;
 }
+.label {
+  font-weight: 800;
+  line-height: 1;
+  color: var(--ink);
+  text-shadow: 0 0 3px var(--halo);
+  pointer-events: none;
+}
 .jewel .label {
   font-size: calc(var(--slot) * 0.3);
 }
@@ -443,15 +369,22 @@ svg {
 .jewel.shake {
   animation: shake 0.38s ease;
 }
+.jewel.popped {
+  transform: translateY(-5px) scale(1.1);
+  filter: brightness(1.15) drop-shadow(0 0 7px var(--c));
+}
+.has-pop .jewel:not(.popped) {
+  opacity: 0.45;
+}
+.jewel {
+  transition: transform 0.18s ease, opacity 0.18s ease, filter 0.18s ease;
+}
 .jewel.hint,
-.jewel.coach,
-.tray.hint,
-.tray.coach {
+.jewel.coach {
   animation: pulse 0.9s ease-in-out infinite;
 }
-.tray.hint,
-.tray.coach {
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), inset 0 0 0 2.5px #fff, 0 0 22px rgba(255, 255, 255, 0.35);
+.jewel.coach {
+  opacity: 1;
 }
 @keyframes deal {
   from {
@@ -474,6 +407,35 @@ svg {
     transform: scale(1.12);
     filter: brightness(1.25) drop-shadow(0 0 8px rgba(255, 255, 255, 0.7));
   }
+}
+
+#hold {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+  padding: 7px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28), inset 0 0 0 1px var(--line);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease;
+}
+#hold.target {
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.28), inset 0 0 0 2.5px var(--accent), 0 0 22px -6px var(--accent);
+}
+#hold .slot {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+#hold .jewel {
+  width: 90%;
+  height: 90%;
+}
+#hold .jewel .label {
+  font-size: 0.8rem;
 }
 
 .controls {
@@ -518,7 +480,7 @@ svg {
 }
 
 /* Completion: helpers step aside so the picture takes the stage. */
-#game.revealed #trays,
+#game.revealed #hold,
 #game.revealed #supply,
 #game.revealed .controls,
 #game.revealed #message {
@@ -721,9 +683,6 @@ input[type='range'] {
 }
 
 @media (max-height: 640px) {
-  .tray {
-    min-height: 62px;
-  }
   .ctl {
     min-height: 44px;
   }

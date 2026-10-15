@@ -1,7 +1,7 @@
 // Level validator: confirms a picture definition can be played to completion
 // with every jewel accounted for.
 
-import { compilePicture, Game, MAX_TRAYS } from './engine.js';
+import { compilePicture, Game, MAX_ACTIVE_COLORS } from './engine.js';
 
 export const MAX_COLORS = 12;
 
@@ -29,9 +29,6 @@ export function validatePicture(def) {
   const pic = compilePicture(def);
   if (pic.cells.includes(-2)) err('rows reference a key missing from the palette');
   pic.totals.forEach((t, c) => t === 0 && err(`palette color ${def.palette[c].key} is never used`));
-  pic.order.forEach((o, c) => {
-    if (o.length !== pic.totals[c]) err(`placement order for ${def.palette[c].key} misses cells`);
-  });
   if (errors.length) return errors;
 
   // Play the level through automatically and check inventory at every step.
@@ -43,33 +40,43 @@ export function validatePicture(def) {
   return errors;
 }
 
-// Plays a level to completion, sorting supply jewels in a seeded order.
-// Returns the number of sort actions taken.
+// Plays a level to completion with seeded choices: usually placing a
+// random available color at a random empty cell, sometimes parking jewels in
+// the holding tray or undoing that. Returns the number of placements.
 export function simulate(pic, seed, onStep) {
   const g = Game.create(pic, seed);
-  let actions = 0;
   let rnd = seed;
   const pick = (n) => {
     rnd = (rnd * 1103515245 + 12345) & 0x7fffffff;
     return rnd % n;
   };
+  let placements = 0;
+  let steps = 0;
   g.checkInvariants();
   while (!g.isComplete()) {
-    const jewels = g.supply.filter(Boolean);
-    if (!jewels.length) throw new Error('supply ran dry before completion');
-    const j = jewels[pick(jewels.length)];
-    const active = new Set(g.trays.map((t) => t.color));
-    if (g.trays.length > MAX_TRAYS) throw new Error('too many trays');
-    if (!active.has(j.color)) throw new Error('inactive color in supply');
-    const r = g.sort(j.id, j.color);
-    if (!r.ok) throw new Error(`sort rejected: ${r.reason}`);
-    actions++;
+    if (++steps > pic.cellCount * 4) throw new Error('no progress');
+    const colors = g.active.filter((c) => g.available(c).length);
+    if (!colors.length) throw new Error('nothing available before completion');
+    for (const j of [...g.supply, ...g.hold]) if (j && !g.active.includes(j.color)) throw new Error('inactive color in play');
+    if (g.active.length > MAX_ACTIVE_COLORS) throw new Error('too many colors in play');
+    const color = colors[pick(colors.length)];
+    const roll = pick(10);
+    let r;
+    if (roll < 2) r = g.stash(color);
+    else if (roll < 3) r = g.undo();
+    else {
+      const empty = g.emptyCells(color);
+      const before = g.available(color).length;
+      r = g.place(color, empty[pick(empty.length)]);
+      if (!r.ok) throw new Error(`place rejected: ${r.reason}`);
+      if (r.placements.length !== before) throw new Error('not every available jewel placed');
+      placements++;
+    }
     g.checkInvariants();
     onStep?.(g, r);
-    if (actions > pic.cellCount) throw new Error('more actions than cells');
   }
-  if (g.supply.some(Boolean)) throw new Error('jewels left in supply after completion');
-  if (g.trays.length) throw new Error('trays left after completion');
+  if (g.supply.some(Boolean) || g.hold.some(Boolean)) throw new Error('jewels left after completion');
+  if (g.active.length) throw new Error('colors left after completion');
   if (g.filledCells().size !== pic.cellCount) throw new Error('not every cell filled');
-  return actions;
+  return placements;
 }

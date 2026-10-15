@@ -1,5 +1,6 @@
-// Mosaic canvas: draws empty sockets and placed jewels, and handles
-// two-finger pinch, pan, wheel zoom, and double-tap to fit.
+// Mosaic canvas: draws empty sockets and placed jewels, reports taps on
+// cells, and handles two-finger pinch, one-finger pan when zoomed, and
+// wheel zoom.
 
 import { jewelSprite, mix } from './jewels.js';
 
@@ -7,10 +8,13 @@ const MAX_ZOOM = 6;
 const SOCKET_BG = '#1a1f3d';
 
 export class MosaicView {
-  constructor(canvas, { onZoom } = {}) {
+  constructor(canvas, { onZoom, onTap } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.onZoom = onZoom;
+    this.onTap = onTap;
+    this.highlight = null; // color whose empty cells glow as drop targets
+    this.flashes = new Map(); // cell -> end time, for hints
     this.pic = null;
     this.filled = new Set();
     this.pending = new Set(); // committed cells whose jewel is still in flight
@@ -106,6 +110,43 @@ export class MosaicView {
     this.oy = zoomed ? Math.min(my, Math.max(-my, this.oy)) : 0;
   }
 
+  // Cell under a canvas-local point, or -1.
+  cellAt(px, py) {
+    const [x0, y0] = this.origin();
+    const c = this.cell;
+    const x = Math.floor((px - x0) / c);
+    const y = Math.floor((py - y0) / c);
+    if (x < 0 || y < 0 || x >= this.pic.w || y >= this.pic.h) return -1;
+    return y * this.pic.w + x;
+  }
+
+  // Nearest cell passing `test` within `radius` cells of a point, so small
+  // cells stay easy to hit with a finger.
+  nearestCell(px, py, test, radius = 1.6) {
+    const [x0, y0] = this.origin();
+    const c = this.cell;
+    const fx = (px - x0) / c - 0.5;
+    const fy = (py - y0) / c - 0.5;
+    let best = -1;
+    let bestD = radius * radius;
+    const r = Math.ceil(radius);
+    for (let y = Math.round(fy) - r; y <= Math.round(fy) + r; y++) {
+      for (let x = Math.round(fx) - r; x <= Math.round(fx) + r; x++) {
+        if (x < 0 || y < 0 || x >= this.pic.w || y >= this.pic.h) continue;
+        const i = y * this.pic.w + x;
+        const d = (x - fx) ** 2 + (y - fy) ** 2;
+        if (d <= bestD && test(i)) [best, bestD] = [i, d];
+      }
+    }
+    return best;
+  }
+
+  flash(cells, ms = 2400) {
+    const end = performance.now() + ms;
+    for (const c of cells) this.flashes.set(c, end);
+    this.draw();
+  }
+
   pop(cell) {
     this.pops.set(cell, performance.now());
     this.draw();
@@ -150,6 +191,10 @@ export class MosaicView {
     ctx.fill();
 
     const spritePx = Math.max(4, Math.round((c * dpr) / 4) * 4);
+    const glow = 0.55 + 0.45 * Math.sin(now / 180);
+    if (this.highlight !== null) animating = true;
+    for (const [cell, end] of this.flashes) if (now > end) this.flashes.delete(cell);
+    if (this.flashes.size) animating = true;
     const labels = this.showPreview && c >= 18;
     if (labels) {
       ctx.font = `700 ${Math.round(c * 0.4)}px system-ui, sans-serif`;
@@ -177,12 +222,28 @@ export class MosaicView {
         ctx.drawImage(jewelSprite(color, spritePx), x + (c - s) / 2, y + (c - s) / 2, s, s);
       } else {
         const g = c * 0.14;
+        // While a color is picked up, other colors' spots step back.
+        const dim = this.highlight !== null && col !== this.highlight;
+        ctx.globalAlpha = dim ? 0.35 : 1;
         ctx.fillStyle = this.showPreview ? mix(color, SOCKET_BG, 0.68) : 'rgba(255,255,255,0.07)';
         roundRect(ctx, x + g, y + g, c - g * 2, c - g * 2, c * 0.22);
         ctx.fill();
         if (labels) {
           ctx.fillStyle = 'rgba(255,255,255,0.5)';
           ctx.fillText(pic.palette[col].label, x + c / 2, y + c / 2 + 1);
+        }
+        ctx.globalAlpha = 1;
+        const target = col === this.highlight && !this.filled.has(i);
+        if (target || this.flashes.has(i)) {
+          ctx.save();
+          ctx.globalAlpha = target ? glow : 1;
+          ctx.lineWidth = Math.max(1.5, c * 0.1);
+          ctx.strokeStyle = this.flashes.has(i) ? '#ffffff' : mix(color, '#ffffff', 0.55);
+          ctx.shadowColor = color;
+          ctx.shadowBlur = c * 0.5;
+          roundRect(ctx, x + g * 0.6, y + g * 0.6, c - g * 1.2, c - g * 1.2, c * 0.24);
+          ctx.stroke();
+          ctx.restore();
         }
       }
     }
@@ -211,23 +272,21 @@ export class MosaicView {
       const [a, b] = [...this.pointers.values()];
       return { dist: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
     };
-    let lastTap = 0;
+    let tap = null;
     cv.addEventListener('pointerdown', (e) => {
       if (!this.pic) return;
       cv.setPointerCapture(e.pointerId);
-      this.pointers.set(e.pointerId, local(e));
+      const p = local(e);
+      this.pointers.set(e.pointerId, p);
+      tap = this.pointers.size === 1 ? { id: e.pointerId, x: p[0], y: p[1] } : null;
       if (this.pointers.size === 2) this.pinch = { ...pinchState(), scale: this.scale };
-      if (this.pointers.size === 1) {
-        const now = performance.now();
-        if (now - lastTap < 300) this.fit();
-        lastTap = now;
-      }
     });
     cv.addEventListener('pointermove', (e) => {
       const prev = this.pointers.get(e.pointerId);
       if (!prev) return;
       const p = local(e);
       this.pointers.set(e.pointerId, p);
+      if (tap && Math.hypot(p[0] - tap.x, p[1] - tap.y) > 8) tap = null;
       if (this.pointers.size >= 2 && this.pinch) {
         const now = pinchState();
         const [mx, my] = this.pinch.mid;
@@ -248,8 +307,18 @@ export class MosaicView {
       this.pointers.delete(e.pointerId);
       if (this.pointers.size < 2) this.pinch = null;
     };
-    cv.addEventListener('pointerup', end);
-    cv.addEventListener('pointercancel', end);
+    cv.addEventListener('pointerup', (e) => {
+      const wasTap = tap && tap.id === e.pointerId;
+      end(e);
+      if (wasTap) {
+        tap = null;
+        this.onTap?.(...local(e));
+      }
+    });
+    cv.addEventListener('pointercancel', (e) => {
+      tap = null;
+      end(e);
+    });
     cv.addEventListener(
       'wheel',
       (e) => {

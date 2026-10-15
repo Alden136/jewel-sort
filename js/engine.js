@@ -1,12 +1,13 @@
 // Jewel Mosaic rules engine.
 // Pure game logic: no DOM, no timers, no animation. Every jewel is accounted
-// for at all times as placed, in a tray, in the supply, or still queued.
+// for at all times as placed in the picture, in the supply, in the holding
+// tray, or still queued.
 
-export const TRAY_CAPACITY = 8;
 export const SUPPLY_SIZE = 24;
-export const MAX_TRAYS = 6;
+export const HOLD_SIZE = 7;
+export const MAX_ACTIVE_COLORS = 6;
 export const REFILL_THRESHOLD = 16;
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 // ---------------------------------------------------------------- pictures
 
@@ -29,7 +30,6 @@ export function compilePicture(def) {
   const totals = def.palette.map(() => 0);
   for (const c of cells) if (c >= 0) totals[c]++;
   const palette = def.palette.map((p, i) => ({ ...p, label: String(i + 1) }));
-  const order = palette.map((_, c) => placementOrder(cells, w, h, c));
   return {
     id: def.id,
     version: def.version ?? 1,
@@ -41,44 +41,18 @@ export function compilePicture(def) {
     palette,
     cells,
     totals,
-    order,
     cellCount: totals.reduce((a, b) => a + b, 0),
   };
 }
 
-// Orders a color's cells so each batch lands as a coherent patch: regions are
-// visited bottom-up and grown breadth-first from their lowest-left cell.
-export function placementOrder(cells, w, h, color) {
-  const seen = new Uint8Array(w * h);
+function neighbors(i, w, h) {
+  const x = i % w;
+  const y = (i - x) / w;
   const out = [];
-  for (let y = h - 1; y >= 0; y--) {
-    for (let x = 0; x < w; x++) {
-      const start = y * w + x;
-      if (cells[start] !== color || seen[start]) continue;
-      seen[start] = 1;
-      const queue = [start];
-      for (let qi = 0; qi < queue.length; qi++) {
-        const i = queue[qi];
-        out.push(i);
-        const cx = i % w;
-        const cy = (i - cx) / w;
-        const next = [
-          [cx, cy + 1],
-          [cx - 1, cy],
-          [cx + 1, cy],
-          [cx, cy - 1],
-        ];
-        for (const [nx, ny] of next) {
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          const n = ny * w + nx;
-          if (cells[n] === color && !seen[n]) {
-            seen[n] = 1;
-            queue.push(n);
-          }
-        }
-      }
-    }
-  }
+  if (y + 1 < h) out.push(i + w);
+  if (x > 0) out.push(i - 1);
+  if (x + 1 < w) out.push(i + 1);
+  if (y > 0) out.push(i - w);
   return out;
 }
 
@@ -107,19 +81,18 @@ export class Game {
       v: STATE_VERSION,
       pictureId: picture.id,
       pictureVersion: picture.version,
-      placed: new Array(n).fill(0),
+      filled: '0'.repeat(picture.cells.length),
       dealt: new Array(n).fill(0),
-      trays: [],
+      active: [],
       queue: [...Array(n).keys()].filter((c) => picture.totals[c] > 0),
       supply: new Array(SUPPLY_SIZE).fill(null),
+      hold: new Array(HOLD_SIZE).fill(null),
       nextId: 1,
       rng: seed | 0,
       undo: [],
-      selected: null,
     });
     g.introduceColors();
     g.refill(true);
-    g.s.selected = g.s.trays[0]?.color ?? null;
     return g;
   }
 
@@ -143,33 +116,45 @@ export class Game {
 
   // ------------------------------------------------------------ queries
 
-  get trays() {
-    return this.s.trays;
-  }
   get supply() {
     return this.s.supply;
   }
-  get selected() {
-    return this.s.selected;
+  get hold() {
+    return this.s.hold;
+  }
+  get active() {
+    return this.s.active;
   }
 
-  tray(color) {
-    return this.s.trays.find((t) => t.color === color) ?? null;
+  isFilled(cell) {
+    return this.s.filled[cell] === '1';
+  }
+
+  filledCells() {
+    const out = new Set();
+    for (let i = 0; i < this.s.filled.length; i++) if (this.s.filled[i] === '1') out.add(i);
+    return out;
+  }
+
+  placed(color) {
+    let n = 0;
+    const { cells } = this.picture;
+    for (let i = 0; i < cells.length; i++) if (cells[i] === color && this.s.filled[i] === '1') n++;
+    return n;
+  }
+
+  placedTotal() {
+    let n = 0;
+    for (const ch of this.s.filled) if (ch === '1') n++;
+    return n;
   }
 
   remaining(color) {
-    return this.picture.totals[color] - this.s.placed[color];
+    return this.picture.totals[color] - this.placed(color);
   }
 
-  // Size of the color's current batch; shrinks for the final batch.
-  capacity(color) {
-    return Math.min(TRAY_CAPACITY, this.remaining(color));
-  }
-
-  inSupply(color) {
-    let n = 0;
-    for (const j of this.s.supply) if (j && j.color === color) n++;
-    return n;
+  isComplete() {
+    return this.placedTotal() === this.picture.cellCount;
   }
 
   // Jewels of a color that exist only as inventory, not yet dealt.
@@ -177,21 +162,23 @@ export class Game {
     return this.picture.totals[color] - this.s.dealt[color];
   }
 
-  placedTotal() {
-    return this.s.placed.reduce((a, b) => a + b, 0);
-  }
-
-  isComplete() {
-    return this.placedTotal() === this.picture.cellCount;
-  }
-
-  // Cells filled so far, derived from the deterministic placement order.
-  filledCells() {
-    const out = new Set();
-    this.s.placed.forEach((count, c) => {
-      for (let i = 0; i < count; i++) out.add(this.picture.order[c][i]);
-    });
+  // Every jewel of a color the player can pick up right now.
+  available(color) {
+    const out = [];
+    this.s.supply.forEach((j, slot) => j && j.color === color && out.push({ ...j, area: 'supply', slot }));
+    this.s.hold.forEach((j, slot) => j && j.color === color && out.push({ ...j, area: 'hold', slot }));
     return out;
+  }
+
+  emptyCells(color) {
+    const out = [];
+    const { cells } = this.picture;
+    for (let i = 0; i < cells.length; i++) if (cells[i] === color && this.s.filled[i] !== '1') out.push(i);
+    return out;
+  }
+
+  holdFree() {
+    return this.s.hold.filter((j) => !j).length;
   }
 
   canUndo() {
@@ -200,108 +187,156 @@ export class Game {
 
   // ------------------------------------------------------------ actions
 
-  select(color) {
-    if (!this.tray(color)) return false;
-    this.s.selected = color;
-    return true;
-  }
+  // Places every available jewel of `color` into that color's empty cells,
+  // growing outward from the tapped cell. Repeated requests find nothing
+  // left to place, so a jewel is never placed twice.
+  place(color, cell) {
+    const { cells, w, h } = this.picture;
+    if (cells[cell] !== color || this.isFilled(cell)) return { ok: false, reason: 'cell' };
+    const jewels = this.available(color);
+    if (!jewels.length) return { ok: false, reason: 'none' };
 
-  // Sorts one supply jewel into the tray of `color`. A mismatched or stale
-  // request changes nothing, so repeated taps are accepted at most once.
-  sort(jewelId, color) {
-    const slot = this.s.supply.findIndex((j) => j && j.id === jewelId);
-    if (slot < 0) return { ok: false, reason: 'gone' };
-    const jewel = this.s.supply[slot];
-    const tray = this.tray(color);
-    if (!tray) return { ok: false, reason: 'inactive' };
-    if (jewel.color !== color) return { ok: false, reason: 'mismatch', jewel };
-
-    this.s.supply[slot] = null;
-    tray.jewels.push(jewel.id);
-    this.s.undo.push({ id: jewel.id, color, slot });
-
-    const result = { ok: true, jewel, slot, dispatch: null, completedColor: null, introduced: [], dealt: [] };
-    if (tray.jewels.length >= this.capacity(color)) {
-      result.dispatch = this.dispatch(tray);
-      if (this.remaining(color) === 0) {
-        result.completedColor = color;
-        this.s.trays = this.s.trays.filter((t) => t !== tray);
-        result.introduced = this.introduceColors();
-        if (this.s.selected === color) this.s.selected = result.introduced[0] ?? this.s.trays[0]?.color ?? null;
-      }
+    const targets = this.growFrom(color, cell, jewels.length, w, h);
+    const placements = jewels.map((j, k) => ({ id: j.id, area: j.area, slot: j.slot, cell: targets[k] }));
+    const filled = this.s.filled.split('');
+    for (const p of placements) {
+      this.s[p.area][p.slot] = null;
+      filled[p.cell] = '1';
     }
-    result.dealt = this.refill(!!result.dispatch);
+    this.s.filled = filled.join('');
+    // Jewels that left the holding tray can no longer be undone.
+    const placedIds = new Set(placements.map((p) => p.id));
+    this.s.undo = this.s.undo
+      .map((u) => ({ moves: u.moves.filter((m) => !placedIds.has(m.id)) }))
+      .filter((u) => u.moves.length);
+
+    const result = { ok: true, color, placements, completedColor: null, introduced: [], dealt: [] };
+    if (this.remaining(color) === 0) {
+      result.completedColor = color;
+      this.s.active = this.s.active.filter((c) => c !== color);
+      result.introduced = this.introduceColors();
+    }
+    result.dealt = this.refill(true);
     result.finished = this.isComplete();
     return result;
   }
 
-  // Commits a full tray to the picture before any animation runs.
-  dispatch(tray) {
-    const color = tray.color;
-    const count = tray.jewels.length;
-    const start = this.s.placed[color];
-    const cells = this.picture.order[color].slice(start, start + count);
-    const jewelIds = tray.jewels;
-    this.s.placed[color] += count;
-    tray.jewels = [];
-    this.s.undo = this.s.undo.filter((u) => u.color !== color);
-    return { color, cells, jewelIds };
+  // Empty cells of one color, starting at `cell` and spreading to touching
+  // cells; when a region runs out, it continues from the nearest empty cell.
+  growFrom(color, cell, count, w, h) {
+    const empty = new Set(this.emptyCells(color));
+    const out = [];
+    let seed = cell;
+    while (out.length < count && empty.size) {
+      if (!empty.has(seed)) {
+        const sx = cell % w;
+        const sy = (cell - sx) / w;
+        let best = -1;
+        let bestD = Infinity;
+        for (const i of empty) {
+          const d = (i % w - sx) ** 2 + (Math.floor(i / w) - sy) ** 2;
+          if (d < bestD) [best, bestD] = [i, d];
+        }
+        seed = best;
+      }
+      const queue = [seed];
+      empty.delete(seed);
+      for (let qi = 0; qi < queue.length && out.length < count; qi++) {
+        const i = queue[qi];
+        out.push(i);
+        for (const n of neighbors(i, w, h)) {
+          if (empty.has(n)) {
+            empty.delete(n);
+            queue.push(n);
+          }
+        }
+      }
+      // Cells queued but not used go back to the pool.
+      for (const i of queue) if (!out.includes(i)) empty.add(i);
+    }
+    return out;
   }
 
-  // Returns the most recently sorted, not yet dispatched jewel to the supply.
+  // Moves the supply's jewels of `color` into free holding-tray spots.
+  stash(color) {
+    const free = [];
+    this.s.hold.forEach((j, i) => j || free.push(i));
+    if (!free.length) return { ok: false, reason: 'full' };
+    const jewels = this.available(color).filter((j) => j.area === 'supply');
+    if (!jewels.length) return { ok: false, reason: 'none' };
+    const moves = jewels.slice(0, free.length).map((j, k) => ({ id: j.id, color, from: j.slot, to: free[k] }));
+    for (const m of moves) {
+      this.s.hold[m.to] = this.s.supply[m.from];
+      this.s.supply[m.from] = null;
+    }
+    this.s.undo.push({ moves });
+    const dealt = this.refill(false);
+    return { ok: true, color, moves, dealt, left: jewels.length - moves.length };
+  }
+
+  // Returns the most recent move into the holding tray to the supply.
   undo() {
     const entry = this.s.undo.pop();
     if (!entry) return { ok: false };
-    const tray = this.tray(entry.color);
-    tray.jewels = tray.jewels.filter((id) => id !== entry.id);
-    let slot = this.s.supply[entry.slot] ? this.s.supply.indexOf(null) : entry.slot;
-    // With a full supply the jewel simply goes back to the queued inventory.
-    if (slot >= 0) {
-      this.s.supply[slot] = { id: entry.id, color: entry.color };
-    } else {
-      slot = null;
-      this.s.dealt[entry.color]--;
+    const back = [];
+    for (const m of entry.moves) {
+      const at = this.s.hold.findIndex((j) => j && j.id === m.id);
+      if (at < 0) continue;
+      let slot = m.from >= 0 && !this.s.supply[m.from] ? m.from : this.s.supply.indexOf(null);
+      if (slot < 0) {
+        // A full supply sends the jewel back to the queued inventory.
+        slot = null;
+        this.s.dealt[m.color]--;
+      } else {
+        this.s.supply[slot] = this.s.hold[at];
+      }
+      this.s.hold[at] = null;
+      back.push({ id: m.id, color: m.color, from: at, slot });
     }
-    return { ok: true, id: entry.id, color: entry.color, slot };
+    return { ok: true, back };
   }
 
-  // A valid jewel and tray, preferring the selected tray.
+  // The color with the most jewels ready, one of its jewels, and a cell for it.
   hint() {
-    const sel = this.s.selected;
-    const match = this.s.supply.find((j) => j && j.color === sel);
-    const jewel = match ?? this.s.supply.find((j) => j);
-    return jewel ? { jewelId: jewel.id, color: jewel.color } : null;
+    let best = null;
+    for (const c of this.s.active) {
+      const jewels = this.available(c);
+      if (jewels.length && (!best || jewels.length > best.jewels.length)) best = { color: c, jewels };
+    }
+    if (!best) return null;
+    return { color: best.color, jewelId: best.jewels[0].id, cell: this.emptyCells(best.color)[0] };
   }
 
-  // Groups the supply by tray order without changing inventory.
+  // Groups the supply by color without changing inventory.
   rearrange() {
-    const rank = new Map(this.s.trays.map((t, i) => [t.color, i]));
+    const rank = new Map(this.s.active.map((c, i) => [c, i]));
     const jewels = this.s.supply.filter(Boolean).sort((a, b) => rank.get(a.color) - rank.get(b.color) || a.id - b.id);
     this.s.supply = this.s.supply.map((_, i) => jewels[i] ?? null);
+    // Undo slots refer to old positions; returning jewels use any free slot.
+    for (const u of this.s.undo) for (const m of u.moves) m.from = -1;
   }
 
   // ------------------------------------------------------------ internals
 
   introduceColors() {
     const added = [];
-    while (this.s.trays.length < MAX_TRAYS && this.s.queue.length) {
+    while (this.s.active.length < MAX_ACTIVE_COLORS && this.s.queue.length) {
       const color = this.s.queue.shift();
-      this.s.trays.push({ color, jewels: [] });
+      this.s.active.push(color);
       added.push(color);
     }
     return added;
   }
 
   // Deals new jewels into empty supply slots from the exact queued inventory
-  // of active colors. Runs when the supply is low or after a batch commits.
+  // of active colors. Runs when the supply is low or after a placement.
   refill(force) {
     const count = this.s.supply.filter(Boolean).length;
     if (!force && count > REFILL_THRESHOLD) return [];
     const dealt = [];
-    const empties = [];
-    this.s.supply.forEach((j, i) => j || empties.push(i));
-    const queued = new Map(this.s.trays.map((t) => [t.color, this.queued(t.color)]));
-    for (const slot of empties) {
+    const queued = new Map(this.s.active.map((c) => [c, this.queued(c)]));
+    for (let slot = 0; slot < this.s.supply.length; slot++) {
+      if (this.s.supply[slot]) continue;
       let total = 0;
       for (const q of queued.values()) total += q;
       if (total === 0) break;
@@ -331,40 +366,33 @@ export class Game {
     const fail = (msg) => {
       throw new Error(`invariant: ${msg}`);
     };
-    if (s.supply.length !== SUPPLY_SIZE) fail('supply size');
-    if (s.placed.length !== p.palette.length || s.dealt.length !== p.palette.length) fail('color count');
-    if (s.trays.length > MAX_TRAYS) fail('too many trays');
+    if (s.supply.length !== SUPPLY_SIZE || s.hold.length !== HOLD_SIZE) fail('area size');
+    if (typeof s.filled !== 'string' || s.filled.length !== p.cells.length || /[^01]/.test(s.filled)) fail('filled');
+    if (s.dealt.length !== p.palette.length) fail('color count');
+    if (s.active.length > MAX_ACTIVE_COLORS) fail('too many colors');
+    for (let i = 0; i < p.cells.length; i++) if (p.cells[i] < 0 && s.filled[i] === '1') fail(`empty cell ${i} filled`);
     const ids = new Set();
-    const note = (id) => {
-      if (!Number.isInteger(id) || id <= 0 || id >= s.nextId) fail(`bad id ${id}`);
-      if (ids.has(id)) fail(`duplicate jewel ${id}`);
-      ids.add(id);
-    };
-    const active = new Set(s.trays.map((t) => t.color));
-    for (const j of s.supply) {
+    const active = new Set(s.active);
+    const counts = p.palette.map(() => 0);
+    for (const j of [...s.supply, ...s.hold]) {
       if (!j) continue;
-      note(j.id);
-      if (!active.has(j.color)) fail(`inactive color ${j.color} in supply`);
+      if (!Number.isInteger(j.id) || j.id <= 0 || j.id >= s.nextId) fail(`bad id ${j.id}`);
+      if (ids.has(j.id)) fail(`duplicate jewel ${j.id}`);
+      ids.add(j.id);
+      if (!active.has(j.color)) fail(`inactive color ${j.color} in play`);
+      counts[j.color]++;
     }
-    for (const t of s.trays) {
-      t.jewels.forEach(note);
-      if (t.jewels.length >= this.capacity(t.color)) fail(`tray ${t.color} overfull`);
-    }
-    for (const u of s.undo) {
-      if (!this.tray(u.color)?.jewels.includes(u.id)) fail(`stale undo ${u.id}`);
-    }
+    for (const u of s.undo) for (const m of u.moves) if (!s.hold.some((j) => j && j.id === m.id)) fail(`stale undo ${m.id}`);
     p.palette.forEach((_, c) => {
-      const placed = s.placed[c];
-      if (placed < 0 || placed > p.totals[c]) fail(`placed out of range for ${c}`);
+      const placed = this.placed(c);
       const dealt = s.dealt[c];
       if (!(dealt >= 0 && dealt <= p.totals[c])) fail(`dealt out of range for ${c}`);
-      const inTray = this.tray(c)?.jewels.length ?? 0;
-      if (placed + inTray + this.inSupply(c) !== dealt) fail(`inventory mismatch for ${c}`);
+      if (placed + counts[c] !== dealt) fail(`inventory mismatch for ${c}`);
       const queuedColor = s.queue.includes(c);
+      if (queuedColor && dealt !== 0) fail(`queued color ${c} already dealt`);
       if (!active.has(c) && !queuedColor && placed !== p.totals[c] && p.totals[c] > 0) fail(`color ${c} lost`);
-      if (queuedColor && placed !== 0) fail(`queued color ${c} already placed`);
+      if (active.has(c) && placed === p.totals[c]) fail(`finished color ${c} still active`);
     });
-    if (s.selected !== null && !active.has(s.selected)) fail('selected tray inactive');
     return true;
   }
 }
