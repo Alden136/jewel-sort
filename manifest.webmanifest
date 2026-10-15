@@ -1,0 +1,11 @@
+{
+  "name": "Jewel Mosaic",
+  "short_name": "Jewel Mosaic",
+  "description": "Sort loose jewels by color and watch them form a picture.",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#161b36",
+  "theme_color": "#161b36",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

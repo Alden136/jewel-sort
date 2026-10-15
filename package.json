@@ -1,0 +1,11 @@
+{
+  "name": "jewel-mosaic",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A relaxing jewel sorting game where sorted jewels build a pixel mosaic.",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "test": "node --test tests/*.test.js"
+  }
+}

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#161b36" />
+    <meta name="description" content="Jewel Mosaic: sort loose jewels by color and watch them form a picture." />
+    <title>Jewel Mosaic</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <!-- Gallery -->
+    <section id="gallery" class="screen active" aria-label="Picture gallery">
+      <header class="gallery-head">
+        <div>
+          <h1 class="brand">Jewel Mosaic</h1>
+          <p id="galleryProgress" class="muted"></p>
+        </div>
+        <button class="icon-btn" id="gallerySettings" aria-label="Settings">
+          <svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+        </button>
+      </header>
+      <div id="albums"></div>
+    </section>
+
+    <!-- Game -->
+    <section id="game" class="screen" aria-label="Puzzle">
+      <header class="topbar">
+        <button class="icon-btn" id="backBtn" aria-label="Back to gallery">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></svg>
+        </button>
+        <div class="title-block">
+          <h2 id="gameTitle"></h2>
+          <div class="progress" aria-hidden="true"><div id="progressBar"></div></div>
+        </div>
+        <span id="progressText" class="pct" aria-live="off"></span>
+        <button class="icon-btn" id="gameSettings" aria-label="Settings">
+          <svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+        </button>
+      </header>
+      <div id="canvasWrap">
+        <canvas id="mosaic" aria-label="Mosaic picture. Pinch with two fingers to zoom."></canvas>
+        <button class="icon-btn fit-btn" id="fitBtn" aria-label="Fit picture" hidden>
+          <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+        </button>
+      </div>
+      <div id="message" role="status" aria-live="polite"></div>
+      <div id="trays" role="group" aria-label="Color trays"></div>
+      <div id="supply" role="group" aria-label="Jewel supply"></div>
+      <nav class="controls" aria-label="Helpers">
+        <button id="hintBtn" class="ctl">
+          <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z" /></svg>
+          <span>Hint</span>
+        </button>
+        <button id="rearrangeBtn" class="ctl">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5" /><rect x="14" y="4" width="6" height="6" rx="1.5" /><rect x="4" y="14" width="6" height="6" rx="1.5" /><rect x="14" y="14" width="6" height="6" rx="1.5" /></svg>
+          <span>Rearrange</span>
+        </button>
+        <button id="undoBtn" class="ctl">
+          <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+          <span>Undo</span>
+        </button>
+      </nav>
+      <div id="completeSheet" class="sheet" hidden>
+        <h3 id="completeTitle"></h3>
+        <p id="completeText" class="muted"></p>
+        <button id="continueBtn" class="primary">Continue</button>
+      </div>
+    </section>
+
+    <!-- Viewer for completed pictures -->
+    <div id="viewer" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="viewerTitle">
+      <div class="viewer-card">
+        <header class="viewer-head">
+          <h2 id="viewerTitle"></h2>
+          <button class="icon-btn" id="viewerClose" aria-label="Close">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </header>
+        <div id="viewerWrap"><canvas id="viewerCanvas"></canvas></div>
+        <div class="viewer-actions">
+          <button id="replayBtn" class="secondary">Replay</button>
+          <button id="exportBtn" class="primary">Save image</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="settings" class="overlay" hidden role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="settings-card">
+        <header class="viewer-head">
+          <h2 id="settingsTitle">Settings</h2>
+          <button class="icon-btn" id="settingsClose" aria-label="Close settings">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </header>
+        <div id="settingsList"></div>
+        <button id="restartBtn" class="secondary danger" hidden>Restart this picture</button>
+      </div>
+    </div>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
